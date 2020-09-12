@@ -13,68 +13,39 @@ declare(strict_types=1);
 
 namespace Tests\Ekino\PHPStanSonata\Type;
 
-use Doctrine\ORM\QueryBuilder;
 use Ekino\PHPStanSonata\Type\ProxyQueryDynamicReturnTypeExtension;
-use PHPStan\Broker\Broker;
-use PHPStan\Reflection\BrokerAwareExtension;
-use PHPStan\Reflection\ClassReflection;
-use PHPStan\Reflection\MethodReflection;
-use PHPStan\Reflection\MethodsClassReflectionExtension;
-use PHPUnit\Framework\TestCase;
+use PHPStan\Testing\TestCase;
 use Sonata\AdminBundle\Datagrid\ProxyQueryInterface as AdminProxyQueryInterface;
 use Sonata\DatagridBundle\ProxyQuery\ProxyQueryInterface as DatagridProxyQueryInterface;
-use Sonata\DoctrineORMAdminBundle\Datagrid\ProxyQuery;
+use Sonata\DoctrineMongoDBAdminBundle\Datagrid\ProxyQuery as MongoDBProxyQuery;
+use Sonata\DoctrineORMAdminBundle\Datagrid\ProxyQuery as ORMProxyQuery;
 
 /**
  * @author Rémi Marseille <remi.marseille@ekino.com>
  */
 class ProxyQueryDynamicReturnTypeExtensionTest extends TestCase
 {
-    /**
-     * @var ProxyQueryDynamicReturnTypeExtension
-     */
+    /** @var \PHPStan\Broker\Broker */
+    private $broker;
+
+    /** @var ProxyQueryDynamicReturnTypeExtension */
     private $extension;
 
-    /**
-     * Initializes the tests.
-     */
     protected function setUp(): void
     {
+        $this->broker = $this->createBroker();
+
         $this->extension = new ProxyQueryDynamicReturnTypeExtension();
+        $this->extension->setBroker($this->broker);
     }
 
     /**
-     * Asserts the extension implements the expected interfaces.
-     */
-    public function testImplements(): void
-    {
-        $this->assertInstanceOf(MethodsClassReflectionExtension::class, $this->extension);
-        $this->assertInstanceOf(BrokerAwareExtension::class, $this->extension);
-    }
-
-    /**
-     * @param bool   $expected
-     * @param string $className
-     * @param bool   $validMethod
-     * @param string $methodName
-     * @param int    $hasMethodCallCount
-     *
      * @dataProvider hasMethodDataProvider
      */
-    public function testHasMethod(bool $expected, string $className, bool $validMethod, string $methodName, int $hasMethodCallCount): void
+    public function testHasMethod(bool $expectedResult, string $className, string $method): void
     {
-        $classReflection = $this->createMock(ClassReflection::class);
-        $classReflection->expects($this->any())->method('getName')->willReturn($className);
-
-        $dummyClassReflection = $this->createMock(ClassReflection::class);
-        $dummyClassReflection->expects($this->exactly($hasMethodCallCount))->method('hasMethod')->willReturn($validMethod);
-
-        $broker = $this->createMock(Broker::class);
-        $broker->expects($this->exactly($hasMethodCallCount))->method('getClass')->with($this->equalTo(QueryBuilder::class))->willReturn($dummyClassReflection);
-
-        $this->extension->setBroker($broker);
-
-        $this->assertSame($expected, $this->extension->hasMethod($classReflection, $methodName));
+        $classReflection = $this->broker->getClass($className);
+        self::assertSame($expectedResult, $this->extension->hasMethod($classReflection, $method));
     }
 
     /**
@@ -82,31 +53,36 @@ class ProxyQueryDynamicReturnTypeExtensionTest extends TestCase
      */
     public function hasMethodDataProvider(): \Generator
     {
-        yield 'wrong class & method' => [false, 'Foo\Bar', true, 'foo', 0];
-        yield 'wrong class & valid method' => [false, 'Foo\Bar', true, 'leftJoin', 0];
-        yield 'proxy query & valid method' => [true, ProxyQuery::class, true, 'leftJoin', 1];
-        yield 'proxy query & wrong method' => [false, ProxyQuery::class, false, 'foo', 1];
-        yield 'admin proxy query & valid method' => [true, AdminProxyQueryInterface::class, true, 'leftJoin', 1];
-        yield 'admin proxy query & wrong method' => [false, AdminProxyQueryInterface::class, false, 'foo', 1];
-        yield 'datagrid proxy query & valid method' => [true, DatagridProxyQueryInterface::class, true, 'leftJoin', 1];
-        yield 'datagrid proxy query & wrong method' => [false, DatagridProxyQueryInterface::class, false, 'foo', 1];
+        yield 'wrong class & method' => [false, \stdClass::class, 'foo'];
+        yield 'wrong class & valid method' => [false, \stdClass::class, 'leftJoin'];
+        yield 'proxy query & valid method' => [true, ORMProxyQuery::class, 'leftJoin'];
+        yield 'proxy query & wrong method' => [false, ORMProxyQuery::class, 'foo'];
+        yield 'mongodb proxy query & valid method' => [true, MongoDBProxyQuery::class, 'field'];
+        yield 'mongodb proxy query & wrong method' => [false, MongoDBProxyQuery::class, 'foo'];
+        yield 'admin proxy query & valid method' => [true, AdminProxyQueryInterface::class, 'leftJoin'];
+        yield 'admin proxy query & wrong method' => [false, AdminProxyQueryInterface::class, 'foo'];
+        yield 'datagrid proxy query & valid method' => [true, DatagridProxyQueryInterface::class, 'leftJoin'];
+        yield 'datagrid proxy query & wrong method' => [false, DatagridProxyQueryInterface::class, 'foo'];
     }
 
     /**
-     * Tests getMethod.
+     * @dataProvider getMethodDataProvider
      */
-    public function testGetMethod(): void
+    public function testGetMethod( string $className, string $method): void
     {
-        $methodReflection = $this->createMock(MethodReflection::class);
+        $classReflection  = $this->broker->getClass($className);
+        $methodReflection = $this->extension->getMethod($classReflection, $method);
+        self::assertSame($method, $methodReflection->getName());
+    }
 
-        $dummyClassReflection = $this->createMock(ClassReflection::class);
-        $dummyClassReflection->expects($this->once())->method('getNativeMethod')->willReturn($methodReflection);
-
-        $broker = $this->createMock(Broker::class);
-        $broker->expects($this->once())->method('getClass')->with($this->equalTo(QueryBuilder::class))->willReturn($dummyClassReflection);
-
-        $this->extension->setBroker($broker);
-
-        $this->assertSame($methodReflection, $this->extension->getMethod($this->createMock(ClassReflection::class), 'leftJoin'));
+    /**
+     * @return \Generator<array>
+     */
+    public function getMethodDataProvider(): \Generator
+    {
+        yield 'proxy query' => [ORMProxyQuery::class, 'leftJoin'];
+        yield 'mongodb proxy query' => [MongoDBProxyQuery::class, 'field'];
+        yield 'admin proxy query' => [AdminProxyQueryInterface::class, 'leftJoin'];
+        yield 'datagrid proxy query' => [DatagridProxyQueryInterface::class, 'leftJoin'];
     }
 }
